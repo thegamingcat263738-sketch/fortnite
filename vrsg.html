@@ -5,10 +5,10 @@
 <title>VRSG Tap Game</title>
 <style>
   body,html{margin:0;padding:0;background:#070710;color:#e6eef6;font-family:sans-serif;user-select:none;}
-  canvas{display:block;margin:12px auto;border:2px solid #0f1720;background:#040514;outline:none;}
+  canvas{display:block;margin:12px auto;border:2px solid #0f1720;background:#040514;}
   #hud{display:flex;justify-content:space-between;max-width:520px;margin:0 auto;padding:6px 12px;color:#9fb6c9;}
   #startOverlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(2,6,12,0.85);display:flex;align-items:center;justify-content:center;z-index:999;}
-  .panel{background:#0b1220;padding:18px;border-radius:10px;min-width:300px;text-align:center;}
+  .panel{background:#0b1220;padding:18px;border-radius:10px;text-align:center;min-width:300px;}
   button{background:#12a7ff;color:white;border:none;padding:10px 20px;border-radius:8px;font-weight:600;cursor:pointer;}
   button:active{transform:translateY(1px);}
 </style>
@@ -31,34 +31,39 @@
 
 <script>
 (() => {
-  const canvas=document.getElementById('gameCanvas');
-  const ctx=canvas.getContext('2d');
-  const scoreEl=document.getElementById('score');
-  const comboEl=document.getElementById('combo');
-  const missesEl=document.getElementById('misses');
-  const startOverlay=document.getElementById('startOverlay');
-  const startBtn=document.getElementById('startBtn');
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const comboEl = document.getElementById('combo');
+  const missesEl = document.getElementById('misses');
+  const startOverlay = document.getElementById('startOverlay');
+  const startBtn = document.getElementById('startBtn');
 
-  const lanes=4;
-  const laneWidth=canvas.width/lanes;
-  const keyMap=['d','f','j','k'];
-  const laneColors=[{fill:'#00bcd4',rim:'#083238'},{fill:'#ff9f1c',rim:'#3a1f04'},{fill:'#57d84b',rim:'#12350a'},{fill:'#ff4d9e',rim:'#3a0a21'}];
+  const lanes = 4;
+  const laneWidth = canvas.width / lanes;
+  const keyMap = ['d','f','j','k'];
+  const laneColors = [
+    {fill:'#00bcd4', rim:'#083238'},
+    {fill:'#ff9f1c', rim:'#3a1f04'},
+    {fill:'#57d84b', rim:'#12350a'},
+    {fill:'#ff4d9e', rim:'#3a0a21'}
+  ];
 
-  let notes=[];
-  let score=0, combo=0, misses=0;
-  const hitLineY=canvas.height-120;
-  const hitWindow=40;
-  const speed=8;
-  let gameStarted=false;
-  const pressedKeys={};
+  let notes = [];
+  let score = 0, combo = 0, misses = 0;
+  const hitLineY = canvas.height - 120;
+  const hitWindow = 40;
+  const speed = 8;
+  let gameStarted = false;
+  const pressedKeys = {};
 
   function createNotes(){
-    notes=[];
-    let y=-60;
+    notes = [];
+    let y = -60;
     for(let i=0;i<80;i++){
-      const lane=Math.floor(Math.random()*lanes);
-      notes.push({lane,y,hit:false});
-      y-=120 + Math.floor(Math.random()*60);
+      const lane = Math.floor(Math.random()*lanes);
+      notes.push({lane, y, hit:false});
+      y -= 120 + Math.floor(Math.random()*60);
     }
   }
 
@@ -77,52 +82,64 @@
     ctx.beginPath(); ctx.moveTo(0,hitLineY); ctx.lineTo(canvas.width,hitLineY); ctx.stroke();
 
     notes.forEach(n=>{
-      if(n.hit) return;
-      const cx=n.lane*laneWidth + laneWidth/2;
-      drawCircle(cx,n.y,28,laneColors[n.lane]);
+      if(!n.hit){
+        const cx = n.lane*laneWidth + laneWidth/2;
+        drawCircle(cx, n.y, 28, laneColors[n.lane]);
+      }
     });
   }
 
   function update(){
     notes.forEach(n=>{
-      if(n.hit) return;
-      n.y+=speed;
-      if(n.y-hitLineY>hitWindow){
-        n.hit=true;
-        combo=0;
-        comboEl.textContent='Combo: '+combo;
-        misses++;
-        missesEl.textContent='Misses: '+misses;
+      if(!n.hit){
+        n.y += speed;
+        if(n.y - hitLineY > hitWindow){
+          n.hit = true;
+          combo = 0;
+          comboEl.textContent = combo;
+          misses++;
+          missesEl.textContent = misses;
+        }
       }
     });
   }
 
   function findNearest(lane){
-    let best=null,dist=Infinity;
+    let nearest = null, dist = Infinity;
     notes.forEach(n=>{
-      if(n.hit) return;
-      if(n.lane!==lane) return;
-      const d=Math.abs(n.y-hitLineY);
-      if(d<dist){dist=d;best=n;}
+      if(!n.hit && n.lane===lane){
+        const d = Math.abs(n.y - hitLineY);
+        if(d < dist){ dist = d; nearest = n; }
+      }
     });
-    return {note:best,dist};
+    return {note: nearest, dist};
   }
 
   function handleKeyDown(key){
-    const k=key.toLowerCase();
-    const lane=keyMap.indexOf(k);
-    if(lane===-1) return;
+    const k = key.toLowerCase();
+    const lane = keyMap.indexOf(k);
+    if(lane === -1) return;
     if(pressedKeys[k]) return;
-    pressedKeys[k]=true;
+    pressedKeys[k] = true;
 
-    const {note,dist}=findNearest(lane);
-    if(!note){ combo=0; comboEl.textContent='Combo: '+combo; misses++; missesEl.textContent='Misses: '+misses; return; }
-    if(dist<=hitWindow){ note.hit=true; combo++; comboEl.textContent='Combo: '+combo; score+=100; scoreEl.textContent='Score: '+score; }
-    else{ combo=0; comboEl.textContent='Combo: '+combo; misses++; missesEl.textContent='Misses: '+misses; }
+    const {note, dist} = findNearest(lane);
+    if(!note){ combo=0; comboEl.textContent=combo; misses++; missesEl.textContent=misses; return; }
+    if(dist <= hitWindow){
+      note.hit = true;
+      combo++;
+      score += 100;
+      comboEl.textContent = combo;
+      scoreEl.textContent = score;
+    } else {
+      combo=0;
+      comboEl.textContent = combo;
+      misses++;
+      missesEl.textContent = misses;
+    }
   }
 
   function handleKeyUp(key){
-    pressedKeys[key.toLowerCase()]=false;
+    pressedKeys[key.toLowerCase()] = false;
   }
 
   function gameLoop(){
@@ -134,18 +151,18 @@
   function startGame(){
     if(gameStarted) return;
     startOverlay.style.display='none';
-    gameStarted=true;
     canvas.focus();
+    gameStarted = true;
     createNotes();
   }
 
-  startBtn.addEventListener('click',startGame);
-  window.addEventListener('keydown',e=>{
+  startBtn.addEventListener('click', startGame);
+  window.addEventListener('keydown', e=>{
     if(!gameStarted && (e.key==='Enter'||e.key==='Return')){ startGame(); return; }
     handleKeyDown(e.key);
   });
-  window.addEventListener('keyup',e=>handleKeyUp(e.key));
-  canvas.addEventListener('click',()=>canvas.focus());
+  window.addEventListener('keyup', e=>handleKeyUp(e.key));
+  canvas.addEventListener('click', ()=>canvas.focus());
 
   gameLoop();
 })();
