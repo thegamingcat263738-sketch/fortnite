@@ -1,34 +1,50 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Doom-ish Raycaster (fixed)</title>
+<title>Doom-ish Raycaster — v2</title>
 <style>
-  html,body { height:100%; margin:0; background:#000; }
-  #gameCanvas { display:block; margin:0 auto; background:#333; }
-  #hud { position:fixed; left:12px; top:12px; color:#fff; font-family:monospace; z-index:5; }
-  #hint { position:fixed; right:12px; top:12px; color:#ddd; font-family:monospace; z-index:5; }
+  html,body{height:100%;margin:0;background:#000;font-family:monospace}
+  #gameCanvas{display:block;margin:0 auto; background:#222}
+  #hud{position:fixed;left:12px;top:12px;color:#fff;z-index:5}
+  #hint{position:fixed;right:12px;top:12px;color:#ddd;z-index:5}
+  #overlay{position:fixed;left:0;right:0;top:0;bottom:0;pointer-events:none}
 </style>
 </head>
 <body>
-<div id="hud">Health: <span id="hp">100</span></div>
-<div id="hint">WASD = move · ← → = turn · Click = shoot</div>
-<canvas id="gameCanvas" width="800" height="400"></canvas>
+<div id="hud">
+  <div style="margin-bottom:6px">Health: <span id="hpText">100</span></div>
+  <div style="width:220px;height:18px;background:#333;border:1px solid #555;">
+    <div id="hpBar" style="height:100%;width:100%;background:linear-gradient(#7bdb7b,#1e7a1e)"></div>
+  </div>
+</div>
+<div id="hint">WASD = move · ← → = turn · Click = shoot · R = respawn</div>
+<canvas id="gameCanvas" width="900" height="500"></canvas>
+<div id="overlay"></div>
 <script>
-/* ----- Configuration ----- */
+/* ---------------- Configuration & World ---------------- */
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
-const hpEl = document.getElementById('hp');
+const hpText = document.getElementById('hpText');
+const hpBar = document.getElementById('hpBar');
 
+// Bigger map (14x14) - 1 = wall, 0 = empty
 const MAP = [
-  [1,1,1,1,1,1,1,1,1,1],
-  [1,0,0,0,0,0,0,0,0,1],
-  [1,0,0,0,0,0,0,0,0,1],
-  [1,0,0,0,1,1,0,0,0,1],
-  [1,0,0,0,0,0,0,0,0,1],
-  [1,0,0,0,0,0,0,0,0,1],
-  [1,1,1,1,1,1,1,1,1,1]
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,1,0,1,0,1,1,1,0,1,0,0,1],
+  [1,0,1,0,1,0,0,0,1,0,1,0,0,1],
+  [1,0,1,0,0,0,1,0,0,0,1,0,0,1],
+  [1,0,0,0,1,0,1,0,1,0,0,0,0,1],
+  [1,0,1,0,1,0,1,0,1,1,1,0,0,1],
+  [1,0,1,0,0,0,0,0,0,0,1,0,0,1],
+  [1,0,1,1,1,1,1,1,1,0,1,0,0,1],
+  [1,0,0,0,0,0,0,0,1,0,1,0,0,1],
+  [1,0,1,1,1,0,1,0,1,0,1,1,0,1],
+  [1,0,0,0,0,0,1,0,0,0,0,0,0,1],
+  [1,0,0,0,1,0,0,0,1,1,1,0,0,1],
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1]
 ];
 const ROWS = MAP.length;
 const COLS = MAP[0].length;
@@ -36,239 +52,271 @@ const TILE = 64;
 const WORLD_W = COLS * TILE;
 const WORLD_H = ROWS * TILE;
 
-const FOV = Math.PI / 3; // 60°
-const NUM_RAYS = canvas.width / 2; // each ray 2px wide
-const RAY_STEP = 2; // step size for ray marching
-const MAX_DEPTH = 1000;
+const FOV = Math.PI / 3; // 60deg
+const NUM_RAYS = Math.floor(canvas.width / 2); // each ray ~2px
+const RAY_STEP = 2;
+const MAX_DEPTH = 1200;
 
+/* ---------------- Player ---------------- */
 const player = {
-  x: TILE * 1.5,
-  y: TILE * 1.5,
+  x: TILE * 2.5,
+  y: TILE * 2.5,
   angle: 0,
-  speed: 2.2,
+  speed: 2.4,
   radius: 10,
   health: 100,
-  bullets: []
+  bullets: [],
+  alive: true
 };
 
-const enemies = [
-  { x: TILE * 7 + 20, y: TILE * 2 + 20, speed: 0.6, radius: 12, alive:true }
-];
+/* ---------------- Enemies (better AI & HP) ---------------- */
+// spawn a few enemies around the map
+const enemies = [];
+function spawnEnemies(){
+  enemies.length = 0;
+  const spawns = [
+    {x:TILE*10+20,y:TILE*2+20},
+    {x:TILE*9+30, y:TILE*9+10},
+    {x:TILE*4+30, y:TILE*10+30},
+    {x:TILE*11+20,y:TILE*6+20}
+  ];
+  for(const s of spawns){
+    enemies.push({
+      x:s.x, y:s.y,
+      speed: 0.6 + Math.random()*0.9, // variety
+      radius: 12,
+      hp: 30 + Math.floor(Math.random()*40),
+      maxHp:0,
+      alive:true,
+      state:'patrol',
+      patrolTarget: pickPatrolTarget(s.x,s.y),
+      detectRange: 320 + Math.random()*160,
+      attackDamage: 6 + Math.floor(Math.random()*6),
+      attackCooldown: 60, // frames
+      lastAttack: 0
+    });
+    enemies[enemies.length-1].maxHp = enemies[enemies.length-1].hp;
+  }
+}
 
+function pickPatrolTarget(cx,cy){
+  // pick a random empty tile near cx,cy
+  for(let i=0;i<50;i++){
+    const rx = Math.floor((Math.random()*(COLS-2)+1))*TILE + 16;
+    const ry = Math.floor((Math.random()*(ROWS-2)+1))*TILE + 16;
+    if(!isWallAtXY(rx,ry)) return {x:rx,y:ry};
+  }
+  return {x:cx,y:cy};
+}
+
+/* ---------------- Utilities ---------------- */
+function inBounds(x,y){ return x>=0 && x < WORLD_W && y>=0 && y < WORLD_H; }
+function mapCellAtXY(x,y){ if(!inBounds(x,y)) return 1; const col=Math.floor(x/TILE), row=Math.floor(y/TILE); return MAP[row][col]; }
+function isWallAtXY(x,y){ return mapCellAtXY(x,y) === 1; }
+function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+
+// line of sight: step between two points and ensure no wall intersects
+function lineOfSight(x1,y1,x2,y2){
+  const dx = x2-x1, dy = y2-y1;
+  const dist = Math.hypot(dx,dy);
+  const steps = Math.ceil(dist / 8);
+  for(let i=1;i<=steps;i++){
+    const t = i/steps;
+    const tx = x1 + dx*t;
+    const ty = y1 + dy*t;
+    if(isWallAtXY(tx,ty)) return false;
+  }
+  return true;
+}
+
+/* ---------------- Controls ---------------- */
 const keys = {};
+document.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; if(e.key.toLowerCase()==='r') respawn(); });
+document.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 
-/* ----- Helpers ----- */
-function inBounds(x,y){
-  return x >= 0 && x < WORLD_W && y >= 0 && y < WORLD_H;
-}
-function mapCellAtXY(x,y){
-  if(!inBounds(x,y)) return 1; // out-of-bounds treated as wall
-  const col = Math.floor(x / TILE);
-  const row = Math.floor(y / TILE);
-  return MAP[row][col];
-}
-function isWallAtXY(x,y){
-  return mapCellAtXY(x,y) === 1;
-}
-function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+/* click to shoot in player's facing direction */
+canvas.addEventListener('click', () => { if(!player.alive) return; const speed = 8; player.bullets.push({ x: player.x + Math.cos(player.angle)*(player.radius+6), y: player.y + Math.sin(player.angle)*(player.radius+6), dx: Math.cos(player.angle)*speed, dy: Math.sin(player.angle)*speed, life: 140 }); });
 
-/* ----- Controls ----- */
-document.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
-document.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
-
-/* Shoot forwards (click) */
-canvas.addEventListener('click', () => {
-  // create bullet in world coords heading in player's direction
-  const speed = 6;
-  player.bullets.push({
-    x: player.x + Math.cos(player.angle) * (player.radius + 4),
-    y: player.y + Math.sin(player.angle) * (player.radius + 4),
-    dx: Math.cos(player.angle) * speed,
-    dy: Math.sin(player.angle) * speed,
-    life: 120
-  });
-});
-
-/* ----- Raycasting ----- */
+/* ---------------- Raycasting ---------------- */
 function castRays(){
   const rays = [];
   const startAngle = player.angle - FOV/2;
   for(let i=0;i<NUM_RAYS;i++){
     const rayAngle = startAngle + (i / NUM_RAYS) * FOV;
-    // normalize
-    let sin = Math.sin(rayAngle);
-    let cos = Math.cos(rayAngle);
-    let distance = 0;
-    let hit = false;
-    let hitX = 0, hitY = 0;
+    const sin = Math.sin(rayAngle), cos = Math.cos(rayAngle);
+    let distance = 0; let hit=false; let hitX=0, hitY=0;
     while(!hit && distance < MAX_DEPTH){
       distance += RAY_STEP;
-      const testX = player.x + cos * distance;
-      const testY = player.y + sin * distance;
-      if(!inBounds(testX, testY)) { hit = true; hitX = testX; hitY = testY; break; }
-      if(mapCellAtXY(testX, testY) === 1){
-        hit = true;
-        hitX = testX; hitY = testY;
-        break;
-      }
+      const tx = player.x + cos*distance;
+      const ty = player.y + sin*distance;
+      if(!inBounds(tx,ty)){ hit=true; break; }
+      if(mapCellAtXY(tx,ty) === 1){ hit=true; hitX=tx; hitY=ty; break; }
     }
-    rays.push({distance, angle: rayAngle, hitX, hitY});
+    rays.push({distance, angle:rayAngle, hitX, hitY});
   }
   return rays;
 }
 
-/* ----- Movement with collision ----- */
-function tryMove(newX, newY){
-  // check center cell
+/* ---------------- Movement & Collisions ---------------- */
+function tryMove(newX,newY, radius){
+  radius = radius || player.radius;
   if(isWallAtXY(newX, newY)) return false;
-  // small radius check (simple)
   const corners = [
-    {x:newX - player.radius, y:newY - player.radius},
-    {x:newX + player.radius, y:newY - player.radius},
-    {x:newX - player.radius, y:newY + player.radius},
-    {x:newX + player.radius, y:newY + player.radius}
+    {x:newX-radius,y:newY-radius},{x:newX+radius,y:newY-radius},{x:newX-radius,y:newY+radius},{x:newX+radius,y:newY+radius}
   ];
-  for(const c of corners){
-    if(isWallAtXY(c.x, c.y)) return false;
-  }
-  player.x = newX; player.y = newY;
-  return true;
+  for(const c of corners) if(isWallAtXY(c.x,c.y)) return false;
+  player.x = newX; player.y = newY; return true;
 }
 
-/* ----- Updates ----- */
+/* ---------------- Updates ---------------- */
 function updatePlayer(){
-  let vx = 0, vy = 0;
-  if(keys['w']) { vx += Math.cos(player.angle) * player.speed; vy += Math.sin(player.angle) * player.speed; }
-  if(keys['s']) { vx -= Math.cos(player.angle) * player.speed; vy -= Math.sin(player.angle) * player.speed; }
-  if(keys['a']) { vx += Math.cos(player.angle - Math.PI/2) * player.speed; vy += Math.sin(player.angle - Math.PI/2) * player.speed; }
-  if(keys['d']) { vx += Math.cos(player.angle + Math.PI/2) * player.speed; vy += Math.sin(player.angle + Math.PI/2) * player.speed; }
-  const nextX = player.x + vx;
-  const nextY = player.y + vy;
-  tryMove(nextX, nextY);
+  if(!player.alive) return;
+  let vx=0, vy=0;
+  if(keys['w']){ vx += Math.cos(player.angle) * player.speed; vy += Math.sin(player.angle) * player.speed; }
+  if(keys['s']){ vx -= Math.cos(player.angle) * player.speed; vy -= Math.sin(player.angle) * player.speed; }
+  if(keys['a']){ vx += Math.cos(player.angle - Math.PI/2) * player.speed; vy += Math.sin(player.angle - Math.PI/2) * player.speed; }
+  if(keys['d']){ vx += Math.cos(player.angle + Math.PI/2) * player.speed; vy += Math.sin(player.angle + Math.PI/2) * player.speed; }
+  const nextX = player.x + vx; const nextY = player.y + vy; tryMove(nextX,nextY);
   if(keys['arrowleft']) player.angle -= 0.04;
   if(keys['arrowright']) player.angle += 0.04;
 }
 
 function updateBullets(){
-  for(let i = player.bullets.length - 1; i >= 0; i--){
-    const b = player.bullets[i];
-    b.x += b.dx; b.y += b.dy; b.life--;
-    // remove if hit wall or out of world or expired
-    if(!inBounds(b.x, b.y) || mapCellAtXY(b.x,b.y) === 1 || b.life <= 0){
-      player.bullets.splice(i,1);
-      continue;
-    }
-    // check collision with enemies
-    for(let j = 0; j < enemies.length; j++){
-      const e = enemies[j];
-      if(!e.alive) continue;
-      const dist = Math.hypot(b.x - e.x, b.y - e.y);
-      if(dist < e.radius + 4){
-        // enemy hit
-        e.alive = false;
-        player.bullets.splice(i,1);
-        break;
-      }
-    }
+  for(let i=player.bullets.length-1;i>=0;i--){
+    const b = player.bullets[i]; b.x += b.dx; b.y += b.dy; b.life--;
+    if(!inBounds(b.x,b.y) || mapCellAtXY(b.x,b.y) === 1 || b.life <= 0){ player.bullets.splice(i,1); continue; }
+    // hit enemies
+    for(const e of enemies){ if(!e.alive) continue; const d = Math.hypot(b.x-e.x, b.y-e.y); if(d < e.radius + 3){ e.hp -= 18; if(e.hp <= 0){ e.alive=false; } player.bullets.splice(i,1); break; } }
   }
 }
 
 function updateEnemies(){
   enemies.forEach(e => {
     if(!e.alive) return;
-    const dx = player.x - e.x;
-    const dy = player.y - e.y;
-    const dist = Math.hypot(dx, dy);
-    if(dist > 0){
-      const nx = e.x + (dx / dist) * e.speed;
-      const ny = e.y + (dy / dist) * e.speed;
-      // avoid walking through walls (simple check)
-      if(!isWallAtXY(nx, ny)){
-        e.x = nx; e.y = ny;
+    const dx = player.x - e.x; const dy = player.y - e.y; const dist = Math.hypot(dx,dy);
+    // detect player
+    const canSee = (dist <= e.detectRange) && lineOfSight(e.x,e.y, player.x, player.y);
+    if(canSee){ e.state = 'chase'; }
+    // state behavior
+    if(e.state === 'patrol'){
+      const tx = e.patrolTarget.x, ty = e.patrolTarget.y;
+      const pdx = tx - e.x, pdy = ty - e.y; const pd = Math.hypot(pdx,pdy);
+      if(pd < 6) e.patrolTarget = pickPatrolTarget(e.x,e.y);
+      else{ e.x += (pdx/pd) * e.speed; e.y += (pdy/pd) * e.speed; }
+    } else if(e.state === 'chase'){
+      if(dist > e.detectRange*1.3 || !canSee){ e.state = 'patrol'; e.patrolTarget = pickPatrolTarget(e.x,e.y); }
+      else{
+        // move toward player but avoid walls simply
+        const nx = e.x + (dx/dist) * e.speed;
+        const ny = e.y + (dy/dist) * e.speed;
+        if(!isWallAtXY(nx,ny)){ e.x = nx; e.y = ny; }
       }
     }
-    // damage player when close
-    if(dist < player.radius + e.radius + 2){
-      player.health -= 0.3;
-      player.health = clamp(player.health, 0, 100);
-      hpEl.textContent = Math.floor(player.health);
+    // attack if close
+    if(dist < player.radius + e.radius + 8){
+      if(e.lastAttack <= 0){ player.health -= e.attackDamage; player.health = clamp(player.health, 0, 100); e.lastAttack = e.attackCooldown; }
     }
+    if(e.lastAttack > 0) e.lastAttack--;
   });
+  // update HUD
+  hpText.textContent = Math.max(0, Math.floor(player.health));
+  hpBar.style.width = (player.health/100 * 220) + 'px';
+  // death check
+  if(player.health <= 0 && player.alive){ player.alive = false; setTimeout(()=>{ showDeath(); }, 600); }
 }
 
-/* ----- Drawing ----- */
+/* ---------------- Drawing ---------------- */
 function drawScene(){
-  // sky and floor
-  ctx.fillStyle = '#666';
-  ctx.fillRect(0,0,canvas.width, canvas.height/2); // sky/ceiling
-  ctx.fillStyle = '#111';
-  ctx.fillRect(0,canvas.height/2,canvas.width, canvas.height/2); // floor
+  // sky & floor
+  ctx.fillStyle = '#6e6e78'; ctx.fillRect(0,0,canvas.width,canvas.height/2);
+  ctx.fillStyle = '#111'; ctx.fillRect(0,canvas.height/2,canvas.width,canvas.height/2);
 
-  // walls (raycast)
+  // walls
   const rays = castRays();
-  const rayWidth = canvas.width / rays.length;
+  const rayW = canvas.width / rays.length;
   for(let i=0;i<rays.length;i++){
     const r = rays[i];
     const delta = r.angle - player.angle;
-    // correct fish-eye
     const corrected = r.distance * Math.cos(delta);
     const h = (TILE * canvas.height) / (corrected || 0.0001);
-    const shade = clamp(255 - corrected * 0.6, 30, 255);
-    ctx.fillStyle = `rgb(${Math.floor(shade)},0,0)`; // doom-ish red walls
-    ctx.fillRect(i * rayWidth, (canvas.height/2) - h/2, Math.ceil(rayWidth), h);
+    const shade = clamp(255 - corrected * 0.4, 30, 255);
+    ctx.fillStyle = `rgb(${Math.floor(shade)},0,0)`;
+    ctx.fillRect(Math.floor(i*rayW), Math.floor(canvas.height/2 - h/2), Math.ceil(rayW), Math.ceil(h));
   }
 
-  // draw enemies as vertical sprites if within FOV
+  // enemies as vertical sprites with HP bars
   enemies.forEach(e => {
     if(!e.alive) return;
-    const dx = e.x - player.x;
-    const dy = e.y - player.y;
-    const dist = Math.hypot(dx, dy);
+    const dx = e.x - player.x, dy = e.y - player.y;
+    const dist = Math.hypot(dx,dy);
     if(dist < 10) return;
-    let angleToEnemy = Math.atan2(dy, dx);
-    // normalize difference to [-PI,PI]
-    let diff = angleToEnemy - player.angle;
-    while(diff > Math.PI) diff -= 2*Math.PI;
-    while(diff < -Math.PI) diff += 2*Math.PI;
-    if(Math.abs(diff) > FOV/2) return; // not on screen
-    const spriteHeight = (TILE * canvas.height) / dist;
+    let angleToEnemy = Math.atan2(dy,dx);
+    let diff = angleToEnemy - player.angle; while(diff > Math.PI) diff -= 2*Math.PI; while(diff < -Math.PI) diff += 2*Math.PI;
+    if(Math.abs(diff) > FOV/2) return;
+    const spriteH = (TILE * canvas.height) / dist;
     const screenX = (0.5 + Math.tan(diff) / Math.tan(FOV/2) * 0.5) * canvas.width;
-    // simple occlusion by distance: if spriteHeight huge or screenX NaN skip
     if(!isFinite(screenX)) return;
-    ctx.fillStyle = 'green';
-    ctx.fillRect(screenX - 10, (canvas.height/2) - spriteHeight/2, 20, spriteHeight);
+    // enemy body
+    ctx.fillStyle = '#2aa02a';
+    ctx.fillRect(screenX - 12, canvas.height/2 - spriteH/2, 24, spriteH);
+    // HP bar above sprite
+    const hpW = 24 * (e.hp / e.maxHp);
+    ctx.fillStyle = '#333'; ctx.fillRect(screenX-12, canvas.height/2 - spriteH/2 - 8, 24, 5);
+    ctx.fillStyle = '#ff4444'; ctx.fillRect(screenX-12, canvas.height/2 - spriteH/2 - 8, hpW, 5);
   });
 
-  // draw bullets (world coords -> mini representation)
+  // bullets (world coords redraw as small dots on world-relative HUD area)
   ctx.fillStyle = 'yellow';
   player.bullets.forEach(b => {
-    // show bullet as small dot in center area for quick visual
-    // we also draw a tiny 2px indicator on HUD area so player sees bullets are traveling
-    ctx.fillRect( (b.x - player.x) + canvas.width/2 - 1, (b.y - player.y) + canvas.height/2 - 1, 2, 2);
+    const bx = (b.x - player.x) + canvas.width/2;
+    const by = (b.y - player.y) + canvas.height/2;
+    ctx.fillRect(bx-1, by-1, 2,2);
   });
 
   // center crosshair
-  ctx.strokeStyle = '#fff';
-  ctx.beginPath();
-  ctx.moveTo(canvas.width/2 - 8, canvas.height/2);
-  ctx.lineTo(canvas.width/2 + 8, canvas.height/2);
-  ctx.moveTo(canvas.width/2, canvas.height/2 - 8);
-  ctx.lineTo(canvas.width/2, canvas.height/2 + 8);
-  ctx.stroke();
+  ctx.strokeStyle = '#fff'; ctx.beginPath(); ctx.moveTo(canvas.width/2 - 8, canvas.height/2); ctx.lineTo(canvas.width/2 + 8, canvas.height/2); ctx.moveTo(canvas.width/2, canvas.height/2 - 8); ctx.lineTo(canvas.width/2, canvas.height/2 + 8); ctx.stroke();
+
+  // minimap (top-right)
+  drawMiniMap();
 }
 
-/* ----- Game Loop ----- */
+function drawMiniMap(){
+  const mapW = 180, mapH = 180; const pad = 12;
+  const sx = canvas.width - mapW - pad, sy = pad;
+  ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(sx-4,sy-4,mapW+8,mapH+8);
+  const cellW = mapW / COLS, cellH = mapH / ROWS;
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS;c++){
+      ctx.fillStyle = MAP[r][c] ? '#888' : '#222';
+      ctx.fillRect(sx + c*cellW, sy + r*cellH, cellW, cellH);
+    }
+  }
+  // draw player
+  const px = sx + (player.x / WORLD_W) * mapW; const py = sy + (player.y / WORLD_H) * mapH;
+  ctx.fillStyle = '#ff0'; ctx.beginPath(); ctx.arc(px,py,5,0,Math.PI*2); ctx.fill();
+  // draw enemies
+  enemies.forEach(e => { if(!e.alive) return; const ex = sx + (e.x / WORLD_W) * mapW; const ey = sy + (e.y / WORLD_H) * mapH; ctx.fillStyle = '#0f0'; ctx.fillRect(ex-3,ey-3,6,6); });
+}
+
+/* ---------------- Game Loop ---------------- */
 function gameLoop(){
-  updatePlayer();
-  updateBullets();
-  updateEnemies();
-  drawScene();
-  requestAnimationFrame(gameLoop);
+  updatePlayer(); updateBullets(); updateEnemies(); drawScene(); requestAnimationFrame(gameLoop);
 }
 
-/* ----- Start ----- */
-hpEl.textContent = Math.floor(player.health);
-gameLoop();
+/* ---------------- Helpers & Flow ---------------- */
+function respawn(){ player.x = TILE*2.5; player.y = TILE*2.5; player.health = 100; player.alive = true; hpText.textContent = 100; hpBar.style.width = '220px'; spawnEnemies(); }
+function showDeath(){
+  const overlay = document.getElementById('overlay');
+  overlay.innerHTML = '';
+  const div = document.createElement('div');
+  div.style.position='absolute'; div.style.left='50%'; div.style.top='50%'; div.style.transform='translate(-50%,-50%)';
+  div.style.color='#fff'; div.style.fontSize='28px'; div.style.textAlign='center'; div.style.pointerEvents='none';
+  div.innerHTML = 'YOU DIED<br><span style="font-size:16px;">Press R to respawn</span>';
+  overlay.appendChild(div);
+}
+
+/* ---------------- Init ---------------- */
+spawnEnemies(); respawn(); gameLoop();
 </script>
 </body>
 </html>
