@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>VRSG — Full Demo (Taps / Holds / Mines / Start)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<style>
+  :root{
+    --bg:#070710; --panel:#0b1220; --text:#e6eef6; --muted:#9fb6c9;
+  }
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:Inter,Arial,Helvetica,sans-serif;user-select:none}
+  #wrap{max-width:880px;margin:18px auto;text-align:center}
+  #gameCanvas{display:block;margin:12px auto;border:2px solid #0f1720;background:#040514;box-shadow:0 8px 28px rgba(0,0,0,0.65)}
+  #hud{display:flex;justify-content:space-between;gap:12px;padding:8px 12px;align-items:center;color:var(--muted);max-width:760px;margin:0 auto}
+  #controls{display:flex;gap:12px;align-items:center}
+  input[type="range"]{width:200px}
+  #startOverlay{
+    position:fixed; left:0; right:0; top:0; bottom:0;
+    display:flex; align-items:center; justify-content:center;
+    background:linear-gradient(180deg, rgba(2,6,12,0.7), rgba(2,6,12,0.85));
+    z-index:40;
+  }
+  .panel{background:var(--panel);padding:18px;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,0.6);min-width:320px}
+  button{background:#12a7ff;border:none;padding:10px 20px;border-radius:8px;color:white;font-weight:600;cursor:pointer}
+  button:active{transform:translateY(1px)}
+  small{color:#9aa4b2}
+  #meta{display:flex;gap:12px;align-items:center;justify-content:center;margin-top:8px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h2 style="margin:6px 0 0 0">VRSG — Full Demo (Tap / Hold / Mine)</h2>
+
+  <canvas id="gameCanvas" width="760" height="540" tabindex="0"></canvas>
+
+  <div id="hud">
+    <div>
+      <div id="score" style="font-weight:700">Score: 0</div>
+      <div id="combo" style="color:#8fd1ff">Combo: 0</div>
+    </div>
+
+    <div id="controls">
+      <label style="font-size:13px;color:var(--muted)">Speed</label>
+      <input id="speedRange" type="range" min="8" max="44" value="26">
+      <div id="speedVal">26</div>
+    </div>
+
+    <div style="text-align:right">
+      <div id="judgementSmall" style="font-weight:700;"></div>
+      <div style="font-size:12px;color:var(--muted)">Keys: D F J K • Click canvas after Start</div>
+    </div>
+  </div>
+
+  <div id="meta">
+    <small>Demo chart contains taps, holds, and mines. Judgments will appear when you hit notes.</small>
+  </div>
+</div>
+
+<!-- Start overlay -->
+<div id="startOverlay" aria-hidden="false">
+  <div class="panel" role="dialog" aria-modal="true">
+    <h3 style="margin:0 0 8px 0">Ready to play?</h3>
+    <p style="margin:0 0 12px 0;color:#bcd9ee">Click <strong>Start</strong> to begin the demo chart. Use <strong>D F J K</strong> to hit lanes.</p>
+    <div style="display:flex;gap:8px;justify-content:center">
+      <button id="startBtn">Start</button>
+      <button id="tutorialBtn" style="background:#2b3140">How to play</button>
+    </div>
+    <div style="margin-top:10px;color:var(--muted);font-size:13px">Hold notes: hold key until the tail passes the hit line. Mines: avoid pressing when a mine is on the line.</div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+
+  const scoreEl = document.getElementById('score');
+  const comboEl = document.getElementById('combo');
+  const speedRange = document.getElementById('speedRange');
+  const speedVal = document.getElementById('speedVal');
+  const judgementSmall = document.getElementById('judgementSmall');
+  const startOverlay = document.getElementById('startOverlay');
+  const startBtn = document.getElementById('startBtn');
+  const tutorialBtn = document.getElementById('tutorialBtn');
+
+  const lanes = 4;
+  const laneWidth = canvas.width / lanes;
+  const keyMap = ['d','f','j','k']; // lane keys mapping
+  const laneNames = ['Left','Down','Up','Right'];
+
+  // Colors for flat circle noteskin (flat circle + ring)
+  const laneColors = [
+    {fill:'#00bcd4', rim:'#083238'},
+    {fill:'#ff9f1c', rim:'#3a1f04'},
+    {fill:'#57d84b', rim:'#12350a'},
+    {fill:'#ff4d9e', rim:'#3a0a21'}
+  ];
+
+  // Game / demo state
+  let notes = []; // each note: {type:'tap'|'hold'|'mine', lane, y, length(for hold), hit:false, holdActive:false, held:boolean}
+  let effects = []; // judgment & particles
+  let speed = parseInt(speedRange.value,10);
+  speedVal.textContent = speed;
+
+  let score = 0, combo = 0, maxCombo = 0;
+  const hitLineY = canvas.height - 120;
+  // timing windows expressed in pixels from hit line
+  const windows = {
+    perfect: 14,
+    great: 28,
+    good: 46
+  };
+
+  // game control
+  let gameStarted = false;
+  let notesStartTime = 0; // not using audio; this is a reference if needed later
+
+  // keyboard pressed state (by lane index)
+  const pressedKeys = {};
+
+  // UI events
+  speedRange.addEventListener('input', () => {
+    speed = parseInt(speedRange.value,10);
+    speedVal.textContent = speed;
+  });
+
+  tutorialBtn.addEventListener('click', () => {
+    alert('Tap: press when the circle reaches the line.\nHold: press when the head hits the line and keep holding until the tail passes the line.\nMines: DO NOT press when a mine reaches the line.');
+  });
+
+  startBtn.addEventListener('click', () => {
+    // start the game: remove overlay and start movement from initial offsets
+    startOverlay.style.display = 'none';
+    gameStarted = true;
+    canvas.focus();
+    notesStartTime = performance.now();
+  });
+
+  // helper: create demo chart with taps, holds and mines
+  function createDemoChart(){
+    notes = [];
+    // pattern composition: mix taps, holds, mines
+    let y = -60;
+    const beatSpacing = 100;
+    const patterns = [
+      ['tap','tap','tap','tap'],
+      ['tap','mine','tap','tap'],
+      ['hold','tap','hold','tap'],
+      ['tap','tap','mine','tap'],
+      ['hold','hold','tap','tap']
+    ];
+    // create about ~110 notes with variety
+    for (let i=0;i<110;i++){
+      const lane = Math.floor(Math.random()*lanes);
+      // pick type by probability
+      const r = Math.random();
+      if (r < 0.10){
+        // mine
+        notes.push({type:'mine', lane, y, hit:false});
+      } else if (r < 0.28){
+        // hold
+        const len = 120 + Math.floor(Math.random()*220); // length in px (tail above head)
+        notes.push({type:'hold', lane, y, length:len, hit:false, holdActive:false, held:false, completed:false});
+      } else {
+        // tap
+        notes.push({type:'tap', lane, y, hit:false});
+      }
+      // spacing
+      y -= beatSpacing + Math.floor(Math.random()*140);
+    }
+
+    // ensure at least a few known holds and mines in each lane for demo (not strictly necessary)
+    // add some forced holds
+    notes.push({type:'hold', lane:0, y:-2100, length:320, hit:false, holdActive:false, held:false, completed:false});
+    notes.push({type:'hold', lane:2, y:-2400, length:220, hit:false, holdActive:false, held:false, completed:false});
+    notes.push({type:'mine', lane:1, y:-1800, hit:false});
+  }
+
+  createDemoChart();
+
+  // Drawing helpers
+  function drawFlatCircle(cx, cy, r, color){
+    // flat circle fill + rim
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI*2);
+    ctx.fillStyle = color.fill;
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI*2);
+    ctx.lineWidth = Math.max(3, Math.round(r * 0.18));
+    ctx.strokeStyle = color.rim;
+    ctx.stroke();
+  }
+
+  function drawMine(cx, cy){
+    // simple mine: small X inside a ring
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.beginPath();
+    ctx.arc(0,0,12,0,Math.PI*2);
+    ctx.fillStyle = '#ffd2d2';
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#6b1010';
+    ctx.stroke();
+
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = '#3b0a0a';
+    ctx.beginPath();
+    ctx.moveTo(-8,-8); ctx.lineTo(8,8);
+    ctx.moveTo(-8,8); ctx.lineTo(8,-8);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Draw lanes / HUD
+  function drawHUD(){
+    ctx.fillStyle = '#03040a';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    // lane separators
+    ctx.strokeStyle = '#0d1620';
+    ctx.lineWidth = 2;
+    for (let i=1;i<lanes;i++){
+      ctx.beginPath();
+      ctx.moveTo(i*laneWidth, 0);
+      ctx.lineTo(i*laneWidth, canvas.height);
+      ctx.stroke();
+    }
+
+    // top key labels
+    ctx.fillStyle = '#9fb6c9';
+    ctx.font = '15px Inter, Arial';
+    ctx.textAlign = 'center';
+    for (let i=0;i<lanes;i++){
+      ctx.fillText(keyMap[i].toUpperCase(), i*laneWidth + laneWidth/2, 26);
+    }
+
+    // hit line (glow)
+    ctx.save();
+    ctx.globalAlpha = 0.95;
+    ctx.shadowBlur = 14;
+    ctx.shadowColor = 'rgba(100,200,255,0.55)';
+    ctx.strokeStyle = 'rgba(110,220,255,0.98)';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(0, hitLineY);
+    ctx.lineTo(canvas.width, hitLineY);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Draw notes: taps, holds, mines
+  function drawNotes(){
+    for (const n of notes){
+      if (n.hit) continue;
+
+      // only draw around screen for perf
+      if (n.y < -180 || n.y > canvas.height + 200) continue;
+
+      const cx = n.lane * laneWidth + laneWidth/2;
+
+      if (n.type === 'tap'){
+        drawFlatCircle(cx, n.y, 22, laneColors[n.lane]);
+      } else if (n.type === 'mine'){
+        drawMine(cx, n.y);
+      } else if (n.type === 'hold'){
+        // draw tail (a filled rectangle connecting head and tail) with rim
+        const headY = n.y;
+        const tailY = n.y - n.length;
+        const topY = Math.min(headY, tailY);
+        const bottomY = Math.max(headY, tailY);
+
+        const w = 24;
+        // body
+        ctx.beginPath();
+        ctx.roundRect(cx - w/2, tailY, w, n.length, 12);
+        ctx.fillStyle = '#082228';
+        ctx.fill();
+
+        // rim around body
+        ctx.beginPath();
+        ctx.roundRect(cx - w/2, tailY, w, n.length, 12);
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = '#031117';
+        ctx.stroke();
+
+        // head (flat circle)
+        drawFlatCircle(cx, headY, 22, laneColors[n.lane]);
+
+        // small tail cap for visual
+        ctx.beginPath();
+        ctx.ellipse(cx, tailY, w*0.43, w*0.43, 0, 0, Math.PI*2);
+        ctx.fillStyle = laneColors[n.lane].fill;
+        ctx.globalAlpha = 0.12;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+
+  // Effects (judgment texts & small particles)
+  function spawnJudgment(x,y,text,color){
+    effects.push({type:'jud', x,y, text, color, life: 36});
+  }
+  function spawnParticle(x,y,color){
+    effects.push({type:'part', x,y, vx:(Math.random()-0.5)*2.4, vy:-1.6-Math.random()*1.6, r:6+Math.random()*6, color, life:28});
+  }
+
+  function drawEffects(){
+    for (let i = effects.length-1; i >= 0; i--){
+      const e = effects[i];
+      if (e.type === 'jud'){
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, e.life/36);
+        ctx.font = '20px Inter, Arial';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = e.color;
+        ctx.fillText(e.text, e.x, e.y - (36 - e.life) * 0.5);
+        ctx.restore();
+        e.life--;
+      } else if (e.type === 'part'){
+        ctx.save();
+        ctx.globalAlpha = Math.max(0.05, e.life/28);
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, e.r * (e.life/28), 0, Math.PI*2);
+        ctx.fillStyle = e.color;
+        ctx.fill();
+        ctx.restore();
+        e.x += e.vx; e.y += e.vy; e.vy += 0.06;
+        e.life--;
+      }
+      if (e.life <= 0) effects.splice(i,1);
+    }
+  }
+
+  // Update notes (movement & auto-miss)
+  function updateNotes(){
+    if (!gameStarted) return;
+    for (const n of notes){
+      if (n.hit) continue;
+      n.y += speed;
+
+      // auto-miss for taps if passed beyond good window
+      if (n.type === 'tap'){
+        if (n.y - hitLineY > windows.good + 36){
+          // it's gone too far: miss
+          n.hit = true;
+          combo = 0;
+          comboEl.textContent = 'Combo: ' + combo;
+          spawnJudgment(n.lane * laneWidth + laneWidth/2, hitLineY, 'Miss', '#ff6b6b');
+        }
+      }
+
+      // auto-miss for mine if passed beyond
+      if (n.type === 'mine'){
+        if (n.y - hitLineY > 80) {
+          // mine passed safely; remove
+          n.hit = true;
+        }
+      }
+
+      // holds: if tail passed far below and was not completed, treat as failed release
+      if (n.type === 'hold'){
+        const tailY = n.y - n.length;
+        if (!n.completed && tailY - hitLineY > 80){
+          // tail passed and not completed (not held sufficiently)
+          n.hit = true;
+          n.completed = true;
+          if (n.holdActive){
+            n.holdActive = false;
+          }
+          // penalize a little
+          combo = 0;
+          comboEl.textContent = 'Combo: ' + combo;
+          score = Math.max(0, score - 60);
+          scoreEl.textContent = 'Score: ' + score;
+          spawnJudgment(n.lane * laneWidth + laneWidth/2, hitLineY, 'Miss', '#ff6b6b');
+        }
+      }
+    }
+  }
+
+  // Utility: find nearest active note in lane with certain criteria
+  function findNearest(lane){
+    let best = null;
+    let bestDist = Infinity;
+    for (const n of notes){
+      if (n.hit) continue;
+      if (n.lane !== lane) continue;
+      // For taps / holds / mines, consider head y proximity to hitLine
+      const dist = Math.abs(n.y - hitLineY);
+      if (dist < bestDist){
+        bestDist = dist; best = n;
+      }
+    }
+    return {note: best, dist: best ? Math.abs(best.y - hitLineY) : Infinity};
+  }
+
+  // On key down: handle taps, start holds, or hitting a mine (bad)
+  function handleKeyDown(key){
+    const k = (key || '').toLowerCase();
+    const lane = keyMap.indexOf(k);
+    if (lane === -1) return;
+
+    // prevent retrigger while held
+    if (pressedKeys[k]) return;
+    pressedKeys[k] = true;
+
+    // find nearest note in lane
+    const {note, dist} = findNearest(lane);
+    if (!note){
+      // no note near: a stray press (optional small penalty)
+      // spawn small miss visual
+      spawnJudgment(lane * laneWidth + laneWidth/2, hitLineY, 'Bad', '#ff8b8b');
+      combo = 0;
+      comboEl.textContent = 'Combo: ' + combo;
+      score = Math.max(0, score - 6);
+      scoreEl.textContent = 'Score: ' + score;
+      return;
+    }
+
+    // If it's a mine and within hit window -> bad (hit mine)
+    if (note.type === 'mine'){
+      if (dist <= windows.good){
+        // hit the mine -> penalty
+        note.hit = true;
+        combo = 0;
+        comboEl.textContent = 'Combo: ' + combo;
+        score = Math.max(0, score - 90);
+        scoreEl.textContent = 'Score: ' + score;
+        spawnJudgment(lane * laneWidth + laneWidth/2, hitLineY, 'Mine!', '#d17cff');
+        // small explosion particle
+        for (let i=0;i<8;i++) spawnParticle(lane * laneWidth + laneWidth/2, hitLineY + 2, 'rgba(200,80,200,0.9)');
+      }
+      return;
+    }
+
+    // If it's a tap note and within hit window: judge
+    if (note.type === 'tap'){
+      if (dist <= windows.good){
+        // compute judgment
+        let label = 'Good', color = '#ffd28a', points = 100;
+        if (dist <= windows.perfect){ label='Perfect'; color='#97ffb7'; points = 300; }
+        else if (dist <= windows.great){ label='Great'; color='#a9e6ff'; points = 200; }
+        // mark as hit and update
+        note.hit = true;
+        combo += 1; maxCombo = Math.max(maxCombo, combo);
+        score += points;
+        scoreEl.textContent = 'Score: ' + score;
+        comboEl.textContent = 'Combo: ' + combo;
+        spawnJudgment(lane * laneWidth + laneWidth/2, hitLineY, label, color);
+        for (let i=0;i<5;i++) spawnParticle(lane * laneWidth + laneWidth/2 + (Math.random()-0.5)*24, hitLineY, color);
+      } else {
+        // pressed too early/late: small penalty
+        combo = 0; comboEl.textContent = 'Combo: ' + combo;
+        score = Math.max(0, score - 6);
+        scoreEl.textContent = 'Score: ' + score;
+        spawnJudgment(lane * laneWidth + laneWidth/2, hitLineY, 'Miss', '#ff6b6b');
+      }
+      return;
+    }
+
+    // Hold note handling: start hold if head is within window
+    if (note.type === 'hold'){
+      // If the head is within the acceptable window, start hold
+      if (dist <= windows.good && !note.holdActive && !note.completed){
+        note.holdActive = true;     // player started the hold
+        note.held = true;           // currently holding
+        // award initial hit based on dist
+        let label='Good', color='#ffd28a', points=80;
+        if (dist <= windows.perfect){ label='Perfect'; color='#97ffb7'; points = 240; }
+        else if (dist <= windows.great){ label='Great'; color='#a9e6ff'; points = 160; }
+        score += points;
+        combo += 1; maxCombo = Math.max(maxCombo, combo);
+        scoreEl.textContent = 'Score: ' + score;
+        comboEl.textContent = 'Combo: ' + combo;
+        spawnJudgment(lane * laneWidth + laneWidth/2, hitLineY, label, color);
+      } else {
+        // not close enough to start hold => miss
+        combo = 0; comboEl.textContent = 'Combo: ' + combo;
+        score = Math.max(0, score - 8);
+        scoreEl.textContent = 'Score: ' + score;
+        spawnJudgment(lane * laneWidth + laneWidth/2, hitLineY, 'Miss', '#ff6b6b');
+      }
+      return;
+    }
+  }
+
+  // On key up: finish hold release detection
+  function handleKeyUp(key){
+    const k = (key || '').toLowerCase();
+    const lane = keyMap.indexOf(k);
+    if (lane === -1) return;
+    pressedKeys[k] = false;
+
+    // find hold note that is active for this lane
+    for (const n of notes){
+      if (n.type === 'hold' && !n.hit && n.lane === lane && n.holdActive){
+        n.held = false; // player released
+        // check tail status
+        const tailY = n.y - n.length;
+        // If tailY already passed hitLine (successful full hold)
+        if (tailY >= hitLineY - 8){
+          n.completed = true;
+          n.hit = true;
+          n.holdActive = false;
+          // reward full hold
+          score += 220;
+          scoreEl.textContent = 'Score: ' + score;
+          spawnJudgment(lane * laneWidth + laneWidth/2, hitLineY, 'Hold OK', '#b6ffb8');
+          for (let i=0;i<8;i++) spawnParticle(lane * laneWidth + laneWidth/2 + (Math.random()-0.5)*18, hitLineY, '#a8f2ff');
+        } else {
+          // released too early -> partial or fail
+          n.completed = true;
+          n.hit = true;
+          n.holdActive = false;
+          combo = 0;
+          comboEl.textContent = 'Combo: ' + combo;
+          score = Math.max(0, score - 64);
+          scoreEl.textContent = 'Score: ' + score;
+          spawnJudgment(lane * laneWidth + laneWidth/2, hitLineY, 'Hold Fail', '#ff9b9b');
+        }
+        break;
+      }
+    }
+  }
+
+  // Keyboard listeners
+  window.addEventListener('keydown', (e) => {
+    const k = (e.key || '').toLowerCase();
+    // allow start overlay to receive keyboard too
+    handleKeyDown(k);
+  });
+  window.addEventListener('keyup', (e) => {
+    const k = (e.key || '').toLowerCase();
+    handleKeyUp(k);
+  });
+
+  // mouse focus
+  canvas.addEventListener('click', () => canvas.focus());
+
+  // main draw loop
+  function loop(){
+    // draw
+    drawHUD();
+    drawNotes();
+    drawEffects();
+    // draw small judgment top-right (last judgment)
+    // update movement / logic
+    updateNotes();
+
+    requestAnimationFrame(loop);
+  }
+
+  // Start animation loop
+  loop();
+
+  // Expose debug helpers to console (optional)
+  window._vrsg = {notes, createDemoChart};
+
+  // Polyfill: roundRect for older browsers
+  if (!CanvasRenderingContext2D.prototype.roundRect){
+    CanvasRenderingContext2D.prototype.roundRect = function(x,y,w,h,r){
+      if (typeof r === 'number') r = {tl:r,tr:r,br:r,bl:r};
+      this.beginPath();
+      this.moveTo(x + r.tl, y);
+      this.lineTo(x + w - r.tr, y);
+      this.quadraticCurveTo(x + w, y, x + w, y + r.tr);
+      this.lineTo(x + w, y + h - r.br);
+      this.quadraticCurveTo(x + w, y + h, x + w - r.br, y + h);
+      this.lineTo(x + r.bl, y + h);
+      this.quadraticCurveTo(x, y + h, x, y + h - r.bl);
+      this.lineTo(x, y + r.tl);
+      this.quadraticCurveTo(x, y, x + r.tl, y);
+      this.closePath();
+    }
+  }
+})();
+</script>
+</body>
+</html>
