@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>VRSG Rhythm - Arrows</title>
+<style>
+  html,body{height:100%;margin:0;background:#111;color:#fff;font-family:Arial,Helvetica,sans-serif;user-select:none}
+  #gameCanvas { display:block; margin: 24px auto; background:#222; border:3px solid #444; }
+  #hud { width:400px; margin: 6px auto; display:flex; justify-content:space-between; align-items:center; }
+  #score { font-size:18px; }
+  #instructions { font-size:12px; color:#bbb }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="400" height="600" tabindex="0"></canvas>
+<div id="hud">
+  <div id="score">Score: 0</div>
+  <div id="instructions">Keys: D F J K • Click canvas then press keys</div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+
+  const lanes = 4;
+  const laneWidth = canvas.width / lanes;
+  const keyMap = ['d','f','j','k'];             // lane -> key
+  const arrowSymbols = ['←','↓','↑','→'];       // symbols for lanes
+  let notes = [];
+  let score = 0;
+  const speed = 7;                              // pixels per frame (increased)
+  const hitLineY = canvas.height - 80;          // Y position of hit line
+  const hitWindow = 48;                         // vertical window for hits (px)
+  const hitEffect = [];                         // store visual hit effects
+
+  // create a simple random note chart for demo
+  for (let i = 0; i < 60; i++){
+    const lane = Math.floor(Math.random()*lanes);
+    // stack them above screen spaced by ~100-160 px
+    notes.push({lane, y: - i * (100 + Math.random()*60), hit:false});
+  }
+
+  function drawLanes(){
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    // lane separators
+    ctx.strokeStyle = '#444';
+    ctx.lineWidth = 2;
+    for (let i=1;i<lanes;i++){
+      ctx.beginPath();
+      ctx.moveTo(i*laneWidth, 0);
+      ctx.lineTo(i*laneWidth, canvas.height);
+      ctx.stroke();
+    }
+
+    // key labels at top
+    ctx.fillStyle = '#bbb';
+    ctx.font = '14px Arial';
+    ctx.textAlign = 'center';
+    for (let i=0;i<lanes;i++){
+      ctx.fillText(keyMap[i].toUpperCase(), i*laneWidth + laneWidth/2, 20);
+    }
+
+    // hit line
+    ctx.strokeStyle = '#88f';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(0, hitLineY);
+    ctx.lineTo(canvas.width, hitLineY);
+    ctx.stroke();
+  }
+
+  function drawNotes(){
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '36px Arial';
+    for (let n of notes){
+      if (n.hit) continue;
+      // only draw if near screen to save cycles
+      if (n.y > -100 && n.y < canvas.height + 100){
+        ctx.fillStyle = '#5fe';
+        ctx.fillText(arrowSymbols[n.lane], n.lane*laneWidth + laneWidth/2, n.y);
+      }
+    }
+  }
+
+  function updateNotes(){
+    for (let n of notes){
+      if (n.hit) continue;
+      n.y += speed;
+      // auto-miss if passes hit window far below
+      if (n.y > canvas.height + 40){
+        n.hit = true; // remove from active
+        // maybe reduce score or count miss - omitted for simplicity
+      }
+    }
+    // clean up old notes occasionally
+    if (notes.length && notes[0].y > canvas.height + 200){
+      notes = notes.filter(n => !n.hit || n.y < canvas.height + 200);
+    }
+  }
+
+  function spawnHitEffect(x,y){
+    hitEffect.push({x,y,alpha:1,life:30});
+  }
+
+  function drawHitEffects(){
+    for (let e of hitEffect){
+      ctx.save();
+      ctx.globalAlpha = e.alpha;
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, 18, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+      e.life--;
+      e.alpha = e.life / 30;
+    }
+    // remove dead
+    while(hitEffect.length && hitEffect[0].life <= 0) hitEffect.shift();
+  }
+
+  function tryHit(laneIndex){
+    // find nearest un-hit note in this lane within hit window centered on hitLineY
+    let best = null;
+    let bestDist = Infinity;
+    for (let n of notes){
+      if (n.hit) continue;
+      if (n.lane !== laneIndex) continue;
+      const dist = Math.abs(n.y - hitLineY);
+      if (dist <= hitWindow && dist < bestDist){
+        bestDist = dist;
+        best = n;
+      }
+    }
+    if (best){
+      best.hit = true;
+      // scoring: closer = more points
+      const points = Math.max(30, Math.round((hitWindow - bestDist) * 4) + 70);
+      score += points;
+      document.getElementById('score').textContent = 'Score: ' + score;
+      spawnHitEffect(laneIndex*laneWidth + laneWidth/2, hitLineY);
+    } else {
+      // missed: optionally subtract points or show feedback
+      // small visual for miss
+      spawnHitEffect(laneIndex*laneWidth + laneWidth/2, hitLineY+10);
+    }
+  }
+
+  // main loop
+  function loop(){
+    drawLanes();
+    drawNotes();
+    drawHitEffects();
+    updateNotes();
+    requestAnimationFrame(loop);
+  }
+
+  // keyboard: ensure lowercase comparison and ignore repeat while held
+  const pressed = {};
+  window.addEventListener('keydown', (e) => {
+    const k = (e.key || '').toLowerCase();
+    if (pressed[k]) return; // don't re-fire while holding
+    pressed[k] = true;
+    const keyIndex = keyMap.indexOf(k);
+    if (keyIndex !== -1){
+      tryHit(keyIndex);
+    }
+  });
+  window.addEventListener('keyup', (e) => {
+    const k = (e.key || '').toLowerCase();
+    pressed[k] = false;
+  });
+
+  // clicking canvas focuses it so keyboard events reliably go to page
+  canvas.addEventListener('click', () => canvas.focus());
+  canvas.focus(); // give it initial focus
+
+  // start loop
+  loop();
+
+  // small helper: expose objects for debugging via console (optional)
+  window._vrsg = {notes, speed};
+})();
+</script>
+</body>
+</html>
