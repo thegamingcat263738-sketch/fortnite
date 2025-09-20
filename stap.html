@@ -32,18 +32,17 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
-const lanes = 4; // number of lanes
+const lanes = 4; 
 const laneWidth = canvas.width / lanes;
 let notes = [];
 let score = 0;
-const keyMap = ['d', 'f', 'j', 'k']; // keys for each lane
+const keyMap = ['d', 'f', 'j', 'k']; 
+const arrowSymbols = ['←','↓','↑','→']; // arrows for each lane
 
-// Sample notes (time in ms when they reach bottom)
-const bpm = 120;
-const beatInterval = 60000 / bpm;
+// Sample notes
 for (let i = 1; i <= 50; i++) {
   const lane = Math.floor(Math.random() * lanes);
-  notes.push({lane, y: -i * 100, hit: false});
+  notes.push({lane, y: -i * 120, hit: false});
 }
 
 // Game loop
@@ -59,12 +58,15 @@ function gameLoop() {
     ctx.stroke();
   }
 
-  // Draw notes
+  // Draw notes as arrows
+  ctx.font = '32px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
   notes.forEach(note => {
     if (!note.hit) {
       ctx.fillStyle = 'cyan';
-      ctx.fillRect(note.lane * laneWidth + 5, note.y, laneWidth - 10, 20);
-      note.y += 4; // note speed
+      ctx.fillText(arrowSymbols[note.lane], note.lane * laneWidth + laneWidth/2, note.y);
+      note.y += 6; // faster speed
     }
   });
 
