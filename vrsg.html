@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<title>VRSG — Functional Version</title>
+<title>VRSG — Simplified Tap Notes</title>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <style>
   body,html{margin:0;padding:0;background:#070710;color:#e6eef6;font-family:Inter,Arial,sans-serif;user-select:none}
@@ -17,7 +17,7 @@
 </head>
 <body>
 <div id="wrap">
-  <h2>VRSG — Fixed Holds & Bigger Circles</h2>
+  <h2>VRSG — Simplified Tap Notes</h2>
   <canvas id="gameCanvas" width="520" height="540" tabindex="0"></canvas>
   <div id="hud">
     <div>Score: <span id="score">0</span></div>
@@ -55,10 +55,10 @@
   ];
 
   let notes = [];
-  let speed = 14; // starting slower
+  let speed = 14;
   let score = 0, combo = 0, missCount = 0;
   const hitLineY = canvas.height - 120;
-  const windows = {perfect:16,great:30,good:48};
+  const hitWindow = 40; // pixels within which note counts as hit
   let gameStarted = false;
   const pressedKeys = {};
 
@@ -66,12 +66,9 @@
     notes=[];
     let y=-60;
     for(let i=0;i<80;i++){
-      const r=Math.random();
       const lane=Math.floor(Math.random()*lanes);
-      if(r<0.1) notes.push({type:'mine',lane,y,hit:false});
-      else if(r<0.28) notes.push({type:'hold',lane,y,length:160+Math.floor(Math.random()*220),hit:false,holdActive:false,held:false,completed:false});
-      else notes.push({type:'tap',lane,y,hit:false});
-      y-=100+Math.floor(Math.random()*140);
+      notes.push({type:'tap',lane,y,hit:false});
+      y-=120 + Math.floor(Math.random()*60);
     }
   }
 
@@ -80,34 +77,19 @@
     ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.lineWidth=4; ctx.strokeStyle=color.rim; ctx.stroke();
   }
 
-  function drawMine(cx,cy){
-    ctx.save(); ctx.translate(cx,cy);
-    ctx.beginPath(); ctx.arc(0,0,12,0,Math.PI*2); ctx.fillStyle='#ffd2d2'; ctx.fill();
-    ctx.lineWidth=4; ctx.strokeStyle='#6b1010'; ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(-7,-7); ctx.lineTo(7,7); ctx.moveTo(-7,7); ctx.lineTo(7,-7); ctx.stroke();
-    ctx.restore();
-  }
-
   function drawHUD(){
     ctx.fillStyle='#03040a'; ctx.fillRect(0,0,canvas.width,canvas.height);
     ctx.strokeStyle='#0d1620'; ctx.lineWidth=2;
     for(let i=1;i<lanes;i++){ ctx.beginPath(); ctx.moveTo(i*laneWidth,0); ctx.lineTo(i*laneWidth,canvas.height); ctx.stroke(); }
-    ctx.strokeStyle='rgba(110,220,255,0.98)'; ctx.lineWidth=4; ctx.beginPath(); ctx.moveTo(0,hitLineY); ctx.lineTo(canvas.width,hitLineY); ctx.stroke();
+    ctx.strokeStyle='rgba(110,220,255,0.98)'; ctx.lineWidth=4;
+    ctx.beginPath(); ctx.moveTo(0,hitLineY); ctx.lineTo(canvas.width,hitLineY); ctx.stroke();
   }
 
   function drawNotes(){
     for(const n of notes){
-      if(n.hit) continue; if(n.y<-220||n.y>canvas.height+200) continue;
-      const cx=n.lane*laneWidth+laneWidth/2;
-      if(n.type==='tap') drawCircle(cx,n.y,28,laneColors[n.lane]);
-      else if(n.type==='mine') drawMine(cx,n.y);
-      else if(n.type==='hold'){
-        const headY=n.y, tailY=n.y-n.length, w=28;
-        ctx.beginPath(); ctx.roundRect(cx-w/2,tailY,w,n.length,14); ctx.fillStyle='#082228'; ctx.fill();
-        ctx.beginPath(); ctx.roundRect(cx-w/2,tailY,w,n.length,14); ctx.lineWidth=4; ctx.strokeStyle='#031117'; ctx.stroke();
-        drawCircle(cx,headY,28,laneColors[n.lane]);
-        drawCircle(cx,tailY,22,laneColors[n.lane]);
-      }
+      if(n.hit) continue; if(n.y<-60||n.y>canvas.height+60) continue;
+      const cx=n.lane*laneWidth + laneWidth/2;
+      drawCircle(cx,n.y,28,laneColors[n.lane]);
     }
   }
 
@@ -115,9 +97,7 @@
     if(!gameStarted) return;
     for(const n of notes){
       if(n.hit) continue; n.y+=speed;
-      if(n.type==='tap' && n.y-hitLineY>windows.good+36){ n.hit=true; combo=0; comboEl.textContent='Combo: '+combo; missCount++; missesEl.textContent='Misses: '+missCount;}
-      if(n.type==='mine' && n.y-hitLineY>80) n.hit=true;
-      if(n.type==='hold'){ const tailY=n.y-n.length; if(!n.completed && tailY-hitLineY>80){ n.hit=true; n.completed=true; n.holdActive=false; combo=0; comboEl.textContent='Combo: '+combo; missCount++; missesEl.textContent='Misses: '+missCount;} }
+      if(n.y-hitLineY>hitWindow){ n.hit=true; combo=0; comboEl.textContent='Combo: '+combo; missCount++; missesEl.textContent='Misses: '+missCount; }
     }
   }
 
@@ -131,29 +111,21 @@
     const k=(key||'').toLowerCase(); const lane=keyMap.indexOf(k); if(lane===-1) return;
     if(pressedKeys[k]) return; pressedKeys[k]=true;
     const {note,dist}=findNearest(lane); if(!note){ combo=0; comboEl.textContent='Combo: '+combo; missCount++; missesEl.textContent='Misses: '+missCount; return;}
-    if(note.type==='mine'){ if(dist<=windows.good){ note.hit=true; combo=0; comboEl.textContent='Combo: '+combo; missCount++; missesEl.textContent='Misses: '+missCount;} return;}
-    if(note.type==='tap'){ if(dist<=windows.good){ note.hit=true; combo++; comboEl.textContent='Combo: '+combo; score+=100; scoreEl.textContent='Score: '+score;} else{combo=0; comboEl.textContent='Combo: '+combo; missCount++; missesEl.textContent='Misses: '+missCount;} return;}
-    if(note.type==='hold'){ if(dist<=windows.good && !note.holdActive){ note.holdActive=true; note.held=true; combo++; comboEl.textContent='Combo: '+combo; score+=80; scoreEl.textContent='Score: '+score;} else{ combo=0; comboEl.textContent='Combo: '+combo; missCount++; missesEl.textContent='Misses: '+missCount;} return;}
+    if(dist<=hitWindow){ note.hit=true; combo++; comboEl.textContent='Combo: '+combo; score+=100; scoreEl.textContent='Score: '+score; }
+    else{ combo=0; comboEl.textContent='Combo: '+combo; missCount++; missesEl.textContent='Misses: '+missCount; }
   }
 
-  function handleKeyUp(key){
-    const k=(key||'').toLowerCase(); const lane=keyMap.indexOf(k); if(lane===-1) return; pressedKeys[k]=false;
-    for(const n of notes){ if(n.type==='hold' && !n.hit && n.lane===lane && n.holdActive){ n.holdActive=false; n.completed=true; n.hit=true; score+=220; scoreEl.textContent='Score: '+score; break;}}
-  }
+  function handleKeyUp(key){ const k=(key||'').toLowerCase(); pressedKeys[k]=false; }
 
-  function startGame(){ if(gameStarted) return; startOverlay.style.display='none'; gameStarted=true; canvas.focus(); createDemoChart();}
+  function startGame(){ if(gameStarted) return; startOverlay.style.display='none'; gameStarted=true; canvas.focus(); createDemoChart(); }
 
   startBtn.addEventListener('click',startGame);
-  window.addEventListener('keydown',e=>{ if(!gameStarted && (e.key==='Enter'||e.key==='Return')){ e.preventDefault(); startGame(); return;} handleKeyDown(e.key);});
+  window.addEventListener('keydown',e=>{ if(!gameStarted && (e.key==='Enter'||e.key==='Return')){ e.preventDefault(); startGame(); return;} handleKeyDown(e.key); });
   window.addEventListener('keyup',e=>handleKeyUp(e.key));
   canvas.addEventListener('click',()=>canvas.focus());
 
   function loop(){ drawHUD(); drawNotes(); updateNotes(); requestAnimationFrame(loop);}
   loop();
-
-  if(!CanvasRenderingContext2D.prototype.roundRect){
-    CanvasRenderingContext2D.prototype.roundRect=function(x,y,w,h,r){ if(typeof r==='number') r={tl:r,tr:r,br:r,bl:r}; this.beginPath(); this.moveTo(x+r.tl,y); this.lineTo(x+w-r.tr,y); this.quadraticCurveTo(x+w,y,x+w,y+r.tr); this.lineTo(x+w,y+h-r.br); this.quadraticCurveTo(x+w,y+h,x+w-r.br,y+h); this.lineTo(x+r.bl,y+h); this.quadraticCurveTo(x,y+h,x,y+h-r.bl); this.lineTo(x,y+r.tl); this.quadraticCurveTo(x,y,x+r.tl,y); this.closePath();}
-  }
 })();
 </script>
 </body>
