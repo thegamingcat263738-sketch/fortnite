@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>VRSG — Circular Noteskin Demo</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<style>
+  html,body{height:100%;margin:0;background:#06060b;color:#e6eef6;font-family:Inter,Arial,Helvetica,sans-serif;user-select:none}
+  #wrap{max-width:820px;margin:18px auto;text-align:center}
+  #gameCanvas{display:block;margin:12px auto;border:2px solid #111;background:#050611;box-shadow:0 8px 24px rgba(0,0,0,0.6)}
+  #hud{display:flex;justify-content:space-between;gap:10px;padding:8px 12px;align-items:center;color:#b7c9d9}
+  label{font-size:13px;color:#9aa4b2}
+  input[type="range"]{width:180px}
+  #score{font-weight:700}
+  #instructions{font-size:12px;color:#9aa4b2}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h3 style="margin:6px 0 0 0">VRSG — Circular Noteskin</h3>
+  <canvas id="gameCanvas" width="760" height="540" tabindex="0"></canvas>
+  <div id="hud">
+    <div>
+      <span id="score">Score: 0</span>
+      <span style="margin-left:12px;color:#9fb6c9" id="combo">Combo: 0</span>
+    </div>
+    <div>
+      <label>Speed</label>
+      <input id="speedRange" type="range" min="6" max="36" value="22">
+      <span id="speedVal">22</span>
+    </div>
+    <div id="instructions">Keys: D F J K • Click canvas then press keys</div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const comboEl = document.getElementById('combo');
+  const speedRange = document.getElementById('speedRange');
+  const speedVal = document.getElementById('speedVal');
+
+  const lanes = 4;
+  const laneWidth = canvas.width / lanes;
+  const keyMap = ['d','f','j','k'];
+  const laneColors = [
+    {outer:'#5fe8ff', inner:'#00bcd4'}, // left
+    {outer:'#ffd57a', inner:'#ff9f1c'}, // down
+    {outer:'#c7ff9a', inner:'#57d84b'}, // up
+    {outer:'#ff8fbf', inner:'#ff4d9e'}  // right
+  ];
+
+  let notes = [];
+  let score = 0, combo = 0, maxCombo = 0;
+  let speed = parseInt(speedRange.value,10);
+  const hitLineY = canvas.height - 120;
+  const hitWindow = 46;
+
+  // UI speed control
+  speedRange.addEventListener('input', () => {
+    speed = parseInt(speedRange.value,10);
+    speedVal.textContent = speed;
+  });
+
+  // Create demo note chart
+  function createNotes(count=100){
+    notes = [];
+    let yOffset = -60;
+    for (let i = 0; i < count; i++){
+      const lane = Math.floor(Math.random()*lanes);
+      // variable spacing for a more natural demo chart
+      const gap = 60 + Math.floor(Math.random()*140);
+      notes.push({lane, y: yOffset, hit:false});
+      yOffset -= gap;
+    }
+  }
+  createNotes(110);
+
+  // draw circular noteskin at (cx, cy)
+  // size is radius
+  function drawCircleNoteskin(cx, cy, size, color){
+    // glow
+    ctx.save();
+    ctx.translate(cx, cy);
+
+    ctx.shadowColor = color.outer;
+    ctx.shadowBlur = Math.max(6, size * 0.65);
+
+    // outer ring
+    ctx.beginPath();
+    ctx.arc(0, 0, size, 0, Math.PI*2);
+    ctx.fillStyle = color.outer;
+    ctx.globalAlpha = 0.12;
+    ctx.fill();
+
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 0;
+
+    // ring stroke (dark rim)
+    ctx.beginPath();
+    ctx.arc(0, 0, size, 0, Math.PI*2);
+    ctx.lineWidth = Math.max(6, size * 0.18);
+    ctx.strokeStyle = 'rgba(6,10,12,0.85)';
+    ctx.stroke();
+
+    // inner orb (gradient)
+    const g = ctx.createRadialGradient(-size*0.3, -size*0.3, Math.max(2,size*0.2), 0,0, size*0.9);
+    g.addColorStop(0, '#ffffffcc');
+    g.addColorStop(0.2, color.inner);
+    g.addColorStop(1, '#00000011');
+    ctx.beginPath();
+    ctx.arc(0,0, Math.max(10, size*0.66), 0, Math.PI*2);
+    ctx.fillStyle = g;
+    ctx.fill();
+
+    // glossy highlight
+    ctx.beginPath();
+    ctx.ellipse(-size*0.25, -size*0.28, size*0.28, size*0.18, -0.5, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(255,255,255,0.16)';
+    ctx.fill();
+
+    // small inner core
+    ctx.beginPath();
+    ctx.arc(size*0.44, size*0.12, Math.max(3,size*0.11), 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  // draw background lanes and hit line
+  function drawHUD(){
+    // background panel
+    ctx.fillStyle = '#04050a';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    // vertical separators
+    ctx.strokeStyle = '#0f1a22';
+    ctx.lineWidth = 2;
+    for (let i=1;i<lanes;i++){
+      ctx.beginPath();
+      ctx.moveTo(i*laneWidth, 0);
+      ctx.lineTo(i*laneWidth, canvas.height);
+      ctx.stroke();
+    }
+
+    // lane top labels
+    ctx.fillStyle = '#90a7b8';
+    ctx.font = '15px Inter, Arial';
+    ctx.textAlign = 'center';
+    for (let i=0;i<lanes;i++){
+      ctx.fillText(keyMap[i].toUpperCase(), i*laneWidth + laneWidth/2, 26);
+    }
+
+    // hit line (glow)
+    ctx.save();
+    ctx.globalAlpha = 0.95;
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = 'rgba(90,200,255,0.45)';
+    ctx.strokeStyle = 'rgba(110,220,255,0.95)';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(0, hitLineY);
+    ctx.lineTo(canvas.width, hitLineY);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // effects for hits/misses
+  const effects = [];
+  function spawnHitEffect(x,y, color){
+    effects.push({x,y,color,life:26, vx:(Math.random()-0.5)*2.2, vy:-1.2-Math.random()*1.4, r:6+Math.random()*8});
+  }
+  function drawEffects(){
+    for (let i = effects.length-1; i >= 0; i--){
+      const e = effects[i];
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, e.life/26);
+      ctx.fillStyle = e.color.outer;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, e.r * (e.life/26), 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+      e.x += e.vx; e.y += e.vy; e.vy += 0.08; e.life--;
+      if (e.life <= 0) effects.splice(i,1);
+    }
+  }
+
+  // draw active notes as circles
+  function drawNotes(){
+    for (const n of notes){
+      if (n.hit) continue;
+      if (n.y > -140 && n.y < canvas.height + 140){
+        const cx = n.lane * laneWidth + laneWidth/2;
+        const size = 28; // base radius
+        drawCircleNoteskin(cx, n.y, size, laneColors[n.lane]);
+      }
+    }
+  }
+
+  // update positions and handle auto-miss
+  function updateNotes(){
+    for (const n of notes){
+      if (n.hit) continue;
+      n.y += speed;
+      if (n.y > canvas.height + 80){
+        n.hit = true;
+        combo = 0;
+        comboEl.textContent = 'Combo: ' + combo;
+      }
+    }
+  }
+
+  // try to hit a lane
+  function tryHit(laneIndex){
+    let best = null, bestDist = Infinity;
+    for (const n of notes){
+      if (n.hit || n.lane !== laneIndex) continue;
+      const d = Math.abs(n.y - hitLineY);
+      if (d <= hitWindow && d < bestDist){
+        bestDist = d; best = n;
+      }
+    }
+    if (best){
+      best.hit = true;
+      // scoring by accuracy
+      const accuracy = Math.max(0, hitWindow - bestDist);
+      let points = 0;
+      if (accuracy > hitWindow * 0.85) points = 300;
+      else if (accuracy > hitWindow * 0.6) points = 200;
+      else points = 100;
+      score += points;
+      combo += 1;
+      maxCombo = Math.max(maxCombo, combo);
+      scoreEl.textContent = 'Score: ' + score;
+      comboEl.textContent = 'Combo: ' + combo;
+      const cx = laneIndex*laneWidth + laneWidth/2;
+      spawnHitEffect(cx, hitLineY, laneColors[laneIndex]);
+    } else {
+      // miss
+      combo = 0;
+      comboEl.textContent = 'Combo: ' + combo;
+      score = Math.max(0, score - 10);
+      scoreEl.textContent = 'Score: ' + score;
+      const cx = laneIndex*laneWidth + laneWidth/2;
+      spawnHitEffect(cx, hitLineY + 8, {outer:'rgba(255,40,40,0.9)'});
+    }
+  }
+
+  // keyboard handling (debounce while holding)
+  const pressed = {};
+  window.addEventListener('keydown', (e) => {
+    const k = (e.key || '').toLowerCase();
+    if (pressed[k]) return;
+    pressed[k] = true;
+    const idx = keyMap.indexOf(k);
+    if (idx !== -1) tryHit(idx);
+  });
+  window.addEventListener('keyup', (e) => {
+    const k = (e.key || '').toLowerCase();
+    pressed[k] = false;
+  });
+
+  // focus canvas on click so keyboard works
+  canvas.addEventListener('click', () => canvas.focus());
+  canvas.focus();
+
+  // main loop
+  function loop(){
+    drawHUD();
+    drawNotes();
+    drawEffects();
+    updateNotes();
+    requestAnimationFrame(loop);
+  }
+  loop();
+
+  // expose for debugging
+  window.vrsg = {notes, createNotes, speedRange, speed};
+
+})();
+</script>
+</body>
+</html>
