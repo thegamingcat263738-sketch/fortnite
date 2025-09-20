@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>VRSG — DivideByZero Arrows (Demo)</title>
+<style>
+  html,body{height:100%;margin:0;background:#0b0b0f;color:#fff;font-family:Inter,Arial,Helvetica,sans-serif;user-select:none}
+  #wrap{max-width:820px;margin:18px auto;text-align:center}
+  #gameCanvas{display:block;margin:12px auto;border:2px solid #222;background:#05050a;box-shadow:0 8px 30px rgba(0,0,0,0.7)}
+  #hud{display:flex;justify-content:space-between;gap:10px;padding:6px 12px;align-items:center;color:#cbd5e1}
+  label{font-size:13px;color:#9aa4b2}
+  input[type="range"]{width:180px}
+  #score{font-weight:700}
+  #instructions{font-size:12px;color:#9aa4b2}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h3 style="margin:6px 0 0 0">VRSG — DivideByZero Styled Arrows</h3>
+  <canvas id="gameCanvas" width="760" height="540" tabindex="0"></canvas>
+  <div id="hud">
+    <div>
+      <span id="score">Score: 0</span>
+      <span style="margin-left:10px;color:#7b8794" id="combo">Combo: 0</span>
+    </div>
+    <div>
+      <label>Speed</label>
+      <input id="speedRange" type="range" min="6" max="28" value="18">
+      <span id="speedVal">18</span>
+    </div>
+    <div id="instructions">Keys: D F J K • Click canvas then press keys</div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const comboEl = document.getElementById('combo');
+  const speedRange = document.getElementById('speedRange');
+  const speedVal = document.getElementById('speedVal');
+
+  const lanes = 4;
+  const laneWidth = canvas.width / lanes;
+  const keyMap = ['d','f','j','k'];            // lane keys
+  const arrowDirs = ['left','down','up','right'];
+  let notes = [];
+  let score = 0, combo = 0, maxCombo = 0;
+  let speed = parseInt(speedRange.value,10);  // pixels per frame
+  const hitLineY = canvas.height - 120;
+  const hitWindow = 46;
+
+  // UI
+  speedRange.addEventListener('input', () => {
+    speed = parseInt(speedRange.value,10);
+    speedVal.textContent = speed;
+  });
+
+  // Generate demo notes (random sequence)
+  function createNotes(count=80){
+    notes = [];
+    for (let i = 0; i < count; i++){
+      const lane = Math.floor(Math.random()*lanes);
+      // spacing varies so charts look nicer
+      const gap = 80 + Math.floor(Math.random()*120);
+      notes.push({lane, y: - i * gap - 100, hit:false});
+    }
+  }
+  createNotes(90);
+
+  // Draw a DivideByZero-like arrow at (cx, cy)
+  // dir: 'left'|'down'|'up'|'right'
+  function drawDBZArrow(cx, cy, size, dir, outerColor='#91f7ff', innerColor='#00c3ff', outline='#0b1620', glowColor='rgba(120,220,255,0.18)'){
+    ctx.save();
+    ctx.translate(cx, cy);
+
+    // rotation
+    const rot = {left: Math.PI, down: Math.PI/2, up: -Math.PI/2, right: 0}[dir] || 0;
+    ctx.rotate(rot);
+
+    // glow
+    ctx.shadowColor = glowColor;
+    ctx.shadowBlur = Math.max(8, size * 0.35);
+
+    // outer arrowhead (slightly bigger)
+    ctx.beginPath();
+    ctx.moveTo(-size*0.9, -size*0.6);
+    ctx.lineTo(size*0.9, 0);
+    ctx.lineTo(-size*0.9, size*0.6);
+    ctx.closePath();
+    // gradient for outer
+    const gOuter = ctx.createLinearGradient(-size,0,size,0);
+    gOuter.addColorStop(0, '#ffffff33');
+    gOuter.addColorStop(1, outerColor);
+    ctx.fillStyle = gOuter;
+    ctx.fill();
+
+    // inner arrowhead (main color)
+    ctx.shadowBlur = 0; // keep inner crisp
+    ctx.beginPath();
+    ctx.moveTo(-size*0.6, -size*0.4);
+    ctx.lineTo(size*0.75, 0);
+    ctx.lineTo(-size*0.6, size*0.4);
+    ctx.closePath();
+    // bevel gradient
+    const gInner = ctx.createLinearGradient(-size*0.6, -size, size*0.75, size);
+    gInner.addColorStop(0, '#baf7ff');
+    gInner.addColorStop(0.45, innerColor);
+    gInner.addColorStop(1, '#005b7a');
+    ctx.fillStyle = gInner;
+    ctx.fill();
+
+    // shaft (rectangle)
+    ctx.beginPath();
+    ctx.roundRect(-size*0.2, -size*0.22, size*0.45, size*0.44, size*0.08);
+    ctx.fillStyle = innerColor;
+    ctx.fill();
+
+    // outline stroke for crisp edge (dark)
+    ctx.lineWidth = Math.max(2, size*0.08);
+    ctx.strokeStyle = outline;
+    ctx.stroke();
+
+    // thin bright highlight
+    ctx.beginPath();
+    ctx.moveTo(size*0.2, -size*0.15);
+    ctx.quadraticCurveTo(size*0.05, 0, size*0.2, size*0.15);
+    ctx.lineWidth = Math.max(1, size*0.04);
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  // fallback for roundRect if not available
+  if (!CanvasRenderingContext2D.prototype.roundRect) {
+    CanvasRenderingContext2D.prototype.roundRect = function(x,y,w,h,r){
+      if (typeof r === 'number') { r = {tl:r,tr:r,br:r,bl:r}; }
+      this.beginPath();
+      this.moveTo(x + r.tl, y);
+      this.lineTo(x + w - r.tr, y);
+      this.quadraticCurveTo(x + w, y, x + w, y + r.tr);
+      this.lineTo(x + w, y + h - r.br);
+      this.quadraticCurveTo(x + w, y + h, x + w - r.br, y + h);
+      this.lineTo(x + r.bl, y + h);
+      this.quadraticCurveTo(x, y + h, x, y + h - r.bl);
+      this.lineTo(x, y + r.tl);
+      this.quadraticCurveTo(x, y, x + r.tl, y);
+      this.closePath();
+    };
+  }
+
+  // hit effect particles
+  const effects = [];
+
+  function spawnHit(x,y){
+    effects.push({x,y, life:28, vx: (Math.random()-0.5)*3, vy: -Math.random()*2-0.8, r:6+Math.random()*6});
+  }
+  function drawEffects(){
+    for (let i = effects.length-1; i >= 0; i--){
+      const e = effects[i];
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, e.life/28);
+      ctx.fillStyle = `rgba(160,240,255,${Math.max(0.08,e.life/28)})`;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, e.r * (e.life/28), 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+      e.x += e.vx; e.y += e.vy; e.vy += 0.12; e.life--;
+      if (e.life <= 0) effects.splice(i,1);
+    }
+  }
+
+  // draw lanes, labels, and hit line
+  function drawHUD(){
+    // background panel
+    ctx.fillStyle = '#04060a';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    // lane separators
+    ctx.strokeStyle = '#18202b';
+    ctx.lineWidth = 2;
+    for (let i=1;i<lanes;i++){
+      ctx.beginPath();
+      ctx.moveTo(i*laneWidth, 0);
+      ctx.lineTo(i*laneWidth, canvas.height);
+      ctx.stroke();
+    }
+
+    // soft vertical gradients behind lanes
+    for (let i=0;i<lanes;i++){
+      const x = i*laneWidth;
+      const g = ctx.createLinearGradient(x,0,x+laneWidth,0);
+      g.addColorStop(0, 'rgba(255,255,255,0.01)');
+      g.addColorStop(0.5, 'rgba(255,255,255,0.02)');
+      g.addColorStop(1, 'rgba(255,255,255,0.01)');
+      ctx.fillStyle = g;
+      ctx.fillRect(x,0,laneWidth,canvas.height);
+    }
+
+    // top key letters
+    ctx.fillStyle = '#9fb6c9';
+    ctx.font = '16px Inter, Arial';
+    ctx.textAlign = 'center';
+    for (let i=0;i<lanes;i++){
+      ctx.fillText(keyMap[i].toUpperCase(), i*laneWidth + laneWidth/2, 26);
+    }
+
+    // draw hit line (glowing)
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = 'rgba(60,170,230,0.65)';
+    ctx.strokeStyle = 'rgba(90,200,255,0.95)';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(0, hitLineY);
+    ctx.lineTo(canvas.width, hitLineY);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // draw active notes
+  function drawNotes(){
+    for (const n of notes){
+      if (n.hit) continue;
+      // only draw when near visible area for perf
+      if (n.y > -120 && n.y < canvas.height + 120){
+        const cx = n.lane*laneWidth + laneWidth/2;
+        const size = Math.min(44, Math.max(28, 44));
+        drawDBZArrow(cx, n.y, size, arrowDirs[n.lane]);
+      }
+    }
+  }
+
+  // update positions and auto-miss
+  function updateNotes(){
+    for (const n of notes){
+      if (n.hit) continue;
+      n.y += speed;
+      // auto-miss if it goes well below screen
+      if (n.y > canvas.height + 60){
+        n.hit = true;
+        combo = 0;
+        comboEl.textContent = 'Combo: ' + combo;
+      }
+    }
+  }
+
+  // try to hit a lane: find nearest good note
+  function tryHit(laneIndex){
+    let best = null, bestDist = Infinity;
+    for (const n of notes){
+      if (n.hit || n.lane !== laneIndex) continue;
+      const d = Math.abs(n.y - hitLineY);
+      if (d <= hitWindow && d < bestDist){
+        bestDist = d; best = n;
+      }
+    }
+    if (best){
+      best.hit = true;
+      // scoring based on accuracy
+      const quality = Math.max(0, hitWindow - bestDist);
+      let points = 0;
+      if (quality > hitWindow*0.85) points = 300; // perfect
+      else if (quality > hitWindow*0.6) points = 200; // great
+      else points = 100; // good
+      score += points;
+      combo += 1;
+      maxCombo = Math.max(maxCombo, combo);
+      scoreEl.textContent = 'Score: ' + score;
+      comboEl.textContent = 'Combo: ' + combo;
+      spawnHit(laneIndex*laneWidth + laneWidth/2, hitLineY);
+    } else {
+      // miss feedback
+      combo = 0;
+      comboEl.textContent = 'Combo: ' + combo;
+      // small visual miss
+      spawnHit(laneIndex*laneWidth + laneWidth/2, hitLineY + 6);
+      score = Math.max(0, score - 12);
+      scoreEl.textContent = 'Score: ' + score;
+    }
+  }
+
+  // keyboard handling with hold prevention
+  const pressed = {};
+  window.addEventListener('keydown', (e) => {
+    const k = (e.key || '').toLowerCase();
+    if (pressed[k]) return;
+    pressed[k] = true;
+    const idx = keyMap.indexOf(k);
+    if (idx !== -1) tryHit(idx);
+  });
+  window.addEventListener('keyup', (e) => {
+    const k = (e.key || '').toLowerCase();
+    pressed[k] = false;
+  });
+
+  // support focusing by click
+  canvas.addEventListener('click', () => canvas.focus());
+  canvas.focus();
+
+  // main loop
+  function loop(){
+    drawHUD();
+    drawNotes();
+    drawEffects();
+    updateNotes();
+    requestAnimationFrame(loop);
+  }
+  loop();
+
+  // expose for debugging
+  window.vrsg = {notes, createNotes, speedRange, speed};
+})();
+</script>
+</body>
+</html>
